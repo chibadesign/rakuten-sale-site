@@ -9,8 +9,6 @@ export interface RakutenItem {
   imageUrl: string | null;
   itemUrl: string;
   category: string;
-  discountRate: number | null;
-  originalPrice: number | null;
 }
 
 export interface SaleData {
@@ -23,10 +21,10 @@ export interface SaleData {
 
 export type Category =
   | "すべて"
-  | "調理・製造道具"
   | "キッチン家電"
   | "製菓型・天板"
   | "デコレーション用品"
+  | "調理・製造道具"
   | "製菓材料"
   | "クッキングシート・消耗品"
   | "ラッピング・梱包"
@@ -36,7 +34,6 @@ export type Category =
 
 export interface FilterState {
   category: Category;
-  minPoints: number;
   maxPrice: number | null;
   sortBy: "price_asc" | "price_desc" | "review" | "points";
 }
