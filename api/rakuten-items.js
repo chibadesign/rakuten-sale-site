@@ -33,23 +33,21 @@ function toItem(wrapper) {
     reviewAverage: raw.reviewAverage || 0,
     reviewCount: raw.reviewCount || 0,
 
-    imageUrl: image.replace("128x128", "300x300"),
+    // 高解像度化（?_ex=300x300 を付与して楽天側でリサイズさせるのが最も安全）
+    imageUrl: image ? `${image.split('?')[0]}?_ex=300x300` : "",
 
-    itemUrl: raw.affiliateUrl
-      ? raw.affiliateUrl
-      : raw.itemUrl +
-        (raw.itemUrl.includes("?") ? "&" : "?") +
-        "scid=af_pc_etc&sc2id=" +
-        process.env.RAKUTEN_AFFILIATE_ID,
+    // affiliateIdを渡していれば affiliateUrl にリンクが格納されます
+    itemUrl: raw.affiliateUrl || raw.itemUrl,
 
     category: getCategory(raw.itemName),
   };
 }
 
 // API取得
-async function search(appId, keyword) {
+async function search(appId, affId, keyword) {
   const q = new URLSearchParams({
     applicationId: appId,
+    affiliateId: affId, // アフィリエイトIDをリクエストに含める
     keyword: keyword,
     hits: "30",
     format: "json",
@@ -72,7 +70,7 @@ async function search(appId, keyword) {
 module.exports = async function handler(req, res) {
   const now = Date.now();
 
-  // キャッシュ
+  // キャッシュ処理
   if (cache && now - cacheAt < CACHE_TTL) {
     return res.json({
       items: cache,
@@ -83,6 +81,7 @@ module.exports = async function handler(req, res) {
   }
 
   const appId = process.env.RAKUTEN_APP_ID;
+  const affId = process.env.RAKUTEN_AFFILIATE_ID;
 
   if (!appId) {
     return res.json({
@@ -102,7 +101,8 @@ module.exports = async function handler(req, res) {
   let allItems = [];
 
   for (const kw of keywords) {
-    const raw = await search(appId, kw);
+    // 検索関数に appId と affId を渡す
+    const raw = await search(appId, affId, kw);
 
     raw.forEach(r => {
       const item = r.Item;
@@ -121,9 +121,10 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  // 並び替え
+  // レビュー件数順にソート
   allItems.sort((a, b) => b.reviewCount - a.reviewCount);
 
+  // 上位100件を抽出
   const items = allItems.slice(0, 100);
 
   cache = items;
