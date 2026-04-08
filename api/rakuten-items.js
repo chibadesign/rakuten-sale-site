@@ -1,4 +1,4 @@
-// 楽天市場 商品取得API（完全修正版）
+// 楽天市場 商品取得API（100商品最適化版）
 
 const CACHE_TTL = 60 * 60 * 1000;
 let cache = null;
@@ -15,7 +15,7 @@ function getCategory(name) {
   return "その他製菓用品";
 }
 
-// 変換
+// データ整形
 function toItem(raw) {
   return {
     itemCode: raw.itemCode,
@@ -31,12 +31,13 @@ function toItem(raw) {
   };
 }
 
-// ★ 検索API（これだけでOK）
+// 検索API
 async function search(appId, keyword) {
   const q = new URLSearchParams({
     applicationId: appId,
     keyword: keyword,
     hits: "30",
+    sort: "-reviewCount",
     format: "json",
     formatVersion: "2",
   });
@@ -54,27 +55,10 @@ async function search(appId, keyword) {
   return json.Items || [];
 }
 
-// モック
-function getMock() {
-  return [
-    {
-      itemCode: "mock",
-      itemName: "テスト商品",
-      shopName: "テスト",
-      itemPrice: 1000,
-      pointRate: 10,
-      reviewAverage: 4.5,
-      reviewCount: 100,
-      imageUrl: null,
-      itemUrl: "https://www.rakuten.co.jp/",
-      category: "製菓材料",
-    },
-  ];
-}
-
 module.exports = async function handler(req, res) {
   const now = Date.now();
 
+  // キャッシュ
   if (cache && now - cacheAt < CACHE_TTL) {
     return res.json({
       items: cache,
@@ -84,40 +68,66 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  // ★ここ重要
   const appId = process.env.RAKUTEN_APP_ID;
 
   if (!appId) {
     return res.json({
-      items: getMock(),
+      items: [],
       cachedAt: now,
       nextUpdate: now + CACHE_TTL,
       isMock: true,
     });
   }
 
-  try {
-    const raw = await search(appId, "製菓道具");
-    const items = raw.map(r => toItem(r));
+  // ★ここが強化ポイント
+  const keywords = [
+    "製菓道具",
+    "スイーツ",
+    "お菓子作り",
+    "ケーキ型",
+    "チョコレート",
+    "クッキングシート"
+  ];
 
-    cache = items;
-    cacheAt = now;
+  const seen = new Set();
+  let allItems = [];
 
-    return res.json({
-      items,
-      cachedAt: now,
-      nextUpdate: now + CACHE_TTL,
-      fromCache: false,
-    });
+  for (const kw of keywords) {
+    try {
+      const raw = await search(appId, kw);
 
-  } catch (e) {
-    console.error("API ERROR:", e.message);
+      raw.forEach(r => {
+        if (r.itemCode && !seen.has(r.itemCode)) {
+          seen.add(r.itemCode);
+          allItems.push(toItem(r));
+        }
+      });
 
-    return res.json({
-      items: getMock(),
-      cachedAt: now,
-      nextUpdate: now + CACHE_TTL,
-      isMock: true,
-    });
+    } catch (e) {
+      console.error("Search error:", kw, e.message);
+    }
   }
+
+  // ★売れる並び順（超重要）
+  allItems.sort((a, b) => {
+    // レビュー数重視（信頼）
+    if (b.reviewCount !== a.reviewCount) {
+      return b.reviewCount - a.reviewCount;
+    }
+    // 次に評価
+    return b.reviewAverage - a.reviewAverage;
+  });
+
+  // ★100件に制限（UX最適）
+  const items = allItems.slice(0, 100);
+
+  cache = items;
+  cacheAt = now;
+
+  return res.json({
+    items,
+    cachedAt: now,
+    nextUpdate: now + CACHE_TTL,
+    fromCache: false,
+  });
 };
