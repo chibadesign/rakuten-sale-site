@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { SaleData, RakutenItem, FilterState } from "../types";
 
-const APP_ID = "c192cd6b-dfee-4b18-829b-ea7a0530f19d"; // ←ここだけ自分のIDに変更
+const APP_ID = "pk_vkFmP0juTs5Gg7ua5huJl5jNQpPKoRdVtOlUr2uKg45"; // ←ここだけ自分のIDに変更
 
 export function useSaleData() {
   const [data, setData] = useState<SaleData | null>(null);
