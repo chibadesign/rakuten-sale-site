@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { SaleData, RakutenItem, FilterState } from "../types";
 
-const APP_ID = "pk_vkFmP0juTs5Gg7ua5huJl5jNQpPKoRdVtOlUr2uKg45"; // ←ここだけ自分のIDに変更
+const res = await fetch("/api/rakuten-items");
 
 export function useSaleData() {
   const [data, setData] = useState<SaleData | null>(null);
