@@ -7,15 +7,15 @@ let cacheAt = 0;
 // カテゴリ判定
 function getCategory(name) {
   const t = name || "";
-  if (/ホームベーカリー|ミキサー|オーブン/.test(t)) return "キッチン家電";
-  if (/ケーキ型|マフィン型|タルト型|シリコン型/.test(t)) return "製菓型・天板";
-  if (/絞り袋|口金|デコレーション/.test(t)) return "デコレーション用品";
-  if (/スケール|泡立て器|ボウル/.test(t)) return "調理・製造道具";
+  if (/ミキサー|オーブン/.test(t)) return "キッチン家電";
+  if (/ケーキ型|マフィン型|タルト型/.test(t)) return "製菓型・天板";
+  if (/絞り袋|口金/.test(t)) return "デコレーション用品";
+  if (/スケール|泡立て器|ボウル/.test(t)) return "調理道具";
   if (/薄力粉|砂糖|チョコ/.test(t)) return "製菓材料";
-  return "その他製菓用品";
+  return "その他";
 }
 
-// データ整形（v2対応）
+// データ整形
 function toItem(wrapper) {
   const raw = wrapper.Item;
 
@@ -46,40 +46,27 @@ function toItem(wrapper) {
   };
 }
 
-// 検索API（ページング対応）
+// API取得
 async function search(appId, keyword) {
-  let results = [];
+  const q = new URLSearchParams({
+    applicationId: appId,
+    keyword: keyword,
+    hits: "30",
+    format: "json",
+    formatVersion: "2",
+  });
 
-  for (let page = 1; page <= 3; page++) {
-    const q = new URLSearchParams({
-      applicationId: appId,
-      keyword: keyword,
-      hits: "30",
-      page: String(page),
-      sort: "-reviewCount",
-      format: "json",
-      formatVersion: "2",
-    });
+  const res = await fetch(
+    "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?" + q
+  );
 
-    const res = await fetch(
-      "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?" + q
-    );
-
-    if (!res.ok) {
-      console.error("API ERROR:", await res.text());
-      continue;
-    }
-
-    const json = await res.json();
-
-    if (json.Items) {
-      results = results.concat(json.Items);
-    }
-
-    await new Promise(r => setTimeout(r, 300));
+  if (!res.ok) {
+    console.error("API ERROR:", await res.text());
+    return [];
   }
 
-  return results;
+  const json = await res.json();
+  return json.Items || [];
 }
 
 module.exports = async function handler(req, res) {
@@ -98,62 +85,44 @@ module.exports = async function handler(req, res) {
   const appId = process.env.RAKUTEN_APP_ID;
 
   if (!appId) {
-    console.error("NO APP ID");
     return res.json({
       items: [],
-      cachedAt: now,
-      nextUpdate: now + CACHE_TTL,
-      isMock: true,
+      error: "NO APP ID",
     });
   }
 
   const keywords = [
     "製菓道具",
-    "お菓子作り",
     "ケーキ型",
     "チョコレート",
-    "クッキングシート",
-    "スイーツ"
+    "お菓子作り"
   ];
 
   const seen = new Set();
   let allItems = [];
 
   for (const kw of keywords) {
-    try {
-      const raw = await search(appId, kw);
+    const raw = await search(appId, kw);
 
-      raw.forEach(r => {
-        const item = r.Item;
+    raw.forEach(r => {
+      const item = r.Item;
 
-        if (item?.itemCode && !seen.has(item.itemCode)) {
-          seen.add(item.itemCode);
-          allItems.push(toItem(r));
-        }
-      });
-
-    } catch (e) {
-      console.error("Search error:", kw, e.message);
-    }
+      if (item?.itemCode && !seen.has(item.itemCode)) {
+        seen.add(item.itemCode);
+        allItems.push(toItem(r));
+      }
+    });
   }
 
   if (allItems.length === 0) {
-    console.error("NO ITEMS");
     return res.json({
       items: [],
-      cachedAt: now,
-      nextUpdate: now + CACHE_TTL,
-      isEmpty: true,
+      error: "NO DATA FROM API",
     });
   }
 
   // 並び替え
-  allItems.sort((a, b) => {
-    if (b.reviewCount !== a.reviewCount) {
-      return b.reviewCount - a.reviewCount;
-    }
-    return b.reviewAverage - a.reviewAverage;
-  });
+  allItems.sort((a, b) => b.reviewCount - a.reviewCount);
 
   const items = allItems.slice(0, 100);
 
