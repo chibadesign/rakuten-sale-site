@@ -1,54 +1,34 @@
-// 楽天市場 商品取得API（究極安定版）
-const CACHE_TTL = 60 * 60 * 1000;
-let cache = null;
-let cacheAt = 0;
-
 module.exports = async function handler(req, res) {
-  // CORS設定（すべてのアクセスを許可）
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  if (req.method === 'OPTIONS') return res.status(200).end();
-
+  // 環境変数の読み込みチェック
   const appId = process.env.RAKUTEN_APP_ID;
   const affId = process.env.RAKUTEN_AFFILIATE_ID;
 
-  // 1. 環境変数のチェック
-  if (!appId) return res.status(200).json({ items: [], error: "APP_IDが設定されていません" });
-
-  const keywords = ["製菓道具", "ケーキ型", "チョコ"];
-  let allItems = [];
+  // 1. 楽天APIにテストリクエストを送信
+  const query = new URLSearchParams({
+    applicationId: appId || "",
+    affiliateId: affId || "",
+    keyword: "お菓子", // 最もヒットしやすいワードでテスト
+    hits: "1",
+    format: "json",
+    formatVersion: "2",
+  });
 
   try {
-    for (const kw of keywords) {
-      const q = new URLSearchParams({
-        applicationId: appId,
-        affiliateId: affId || "",
-        keyword: kw,
-        hits: "20",
-        format: "json",
-        formatVersion: "2",
-      });
-      const apiRes = await fetch("https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?" + q);
-      const json = await apiRes.json();
-      if (json.Items) {
-        json.Items.forEach(r => {
-          const raw = r.Item;
-          const image = raw.mediumImageUrls?.[0]?.imageUrl || raw.smallImageUrls?.[0]?.imageUrl || "";
-          allItems.push({
-            itemCode: raw.itemCode,
-            itemName: raw.itemName,
-            itemPrice: raw.itemPrice,
-            imageUrl: image ? `${image.split('?')[0]}?_ex=300x300` : "",
-            itemUrl: raw.affiliateUrl || raw.itemUrl,
-            reviewCount: raw.reviewCount || 0,
-          });
-        });
+    const apiRes = await fetch("https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?" + query);
+    const data = await apiRes.json();
+
+    // ブラウザに診断結果を表示
+    return res.status(200).json({
+      status: apiRes.status,
+      // 楽天からの生のメッセージ（ここが重要！）
+      rakutenMessage: data, 
+      envCheck: {
+        hasAppId: !!appId,
+        hasAffId: !!affId,
+        appIdPrefix: appId ? appId.substring(0, 5) + "..." : "MISSING"
       }
-    }
-    // 重複を消して100件返す
-    const unique = Array.from(new Map(allItems.map(i => [i.itemCode, i])).values());
-    return res.status(200).json({ items: unique.slice(0, 100) });
+    });
   } catch (err) {
-    return res.status(500).json({ items: [], error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 };
