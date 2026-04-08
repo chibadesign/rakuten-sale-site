@@ -1,52 +1,24 @@
 import { useState, useEffect, useCallback } from "react";
 import { SaleData, RakutenItem, FilterState } from "../types";
 
-const res = await fetch("/api/rakuten-items");
-
 export function useSaleData() {
   const [data, setData] = useState<SaleData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetch_ = useCallback(async () => {
+  const fetch_ = useCallback(async (force = false) => {
     setLoading(true);
     setError(null);
 
     try {
-      const res = await fetch(
-        `https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706?applicationId=${APP_ID}&keyword=スイーツ&hits=30&format=json`
-      );
-
+      const res = await fetch("/api/rakuten-items" + (force ? "?t=" + Date.now() : ""));
       if (!res.ok) throw new Error("HTTP " + res.status);
 
-      const json = await res.json();
+      const json: SaleData = await res.json();
+      setData(json);
 
-      // 楽天APIのデータを整形
-      const items: RakutenItem[] = json.Items.map((i: any) => {
-        const item = i.Item;
-        return {
-          itemName: item.itemName,
-          itemPrice: item.itemPrice,
-          itemUrl: item.itemUrl,
-          affiliateUrl: item.affiliateUrl,
-          mediumImageUrls: item.mediumImageUrls,
-          reviewAverage: Number(item.reviewAverage) || 0,
-          pointRate: item.pointRate || 0,
-          category: "スイーツ", // 仮（必要ならロジック追加）
-        };
-      });
-
-      const formatted: SaleData = {
-  items,
-  cachedAt: Date.now(),
-  nextUpdate: Date.now() + 1000 * 60 * 30, // 30分後
-  fromCache: false,
-};
-
-      setData(formatted);
-
-    } catch (err) {
-      setError("データの取得に失敗しました。しばらく後に再試行してください。");
+    } catch (err: any) {
+      setError("データ取得に失敗しました");
     } finally {
       setLoading(false);
     }
@@ -56,7 +28,7 @@ export function useSaleData() {
     fetch_();
   }, [fetch_]);
 
-  return { data, loading, error, refetch: fetch_ };
+  return { data, loading, error, refetch: () => fetch_(true) };
 }
 
 export function useFilteredItems(items: RakutenItem[], filter: FilterState): RakutenItem[] {
