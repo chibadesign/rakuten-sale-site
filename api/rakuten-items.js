@@ -16,7 +16,35 @@ function getCategory(name) {
 }
 
 // データ整形（★ここ重要）
-function toItem(raw) {
+function toItem(wrapper) {
+  const raw = wrapper.Item; // ←これ追加！！！
+
+  const image =
+    raw.mediumImageUrls?.[0]?.imageUrl ||
+    raw.smallImageUrls?.[0]?.imageUrl ||
+    "";
+
+  return {
+    itemCode: raw.itemCode,
+    itemName: raw.itemName,
+    shopName: raw.shopName,
+    itemPrice: raw.itemPrice,
+    pointRate: raw.pointRate || 1,
+    reviewAverage: raw.reviewAverage || 0,
+    reviewCount: raw.reviewCount || 0,
+
+    imageUrl: image.replace("128x128", "300x300"),
+
+    itemUrl: raw.affiliateUrl
+      ? raw.affiliateUrl
+      : raw.itemUrl +
+        (raw.itemUrl.includes("?") ? "&" : "?") +
+        "scid=af_pc_etc&sc2id=" +
+        process.env.RAKUTEN_AFFILIATE_ID,
+
+    category: getCategory(raw.itemName),
+  };
+}
   const image =
     raw.mediumImageUrls?.[0]?.imageUrl ||
     raw.smallImageUrls?.[0]?.imageUrl ||
@@ -49,6 +77,40 @@ function toItem(raw) {
 
 // 検索API（★affiliateIdは絶対入れない）
 async function search(appId, keyword) {
+  let results = [];
+
+  for (let page = 1; page <= 3; page++) {
+    const q = new URLSearchParams({
+      applicationId: appId,
+      keyword: keyword,
+      hits: "30",
+      page: String(page),
+      sort: "-reviewCount",
+      format: "json",
+      formatVersion: "2",
+    });
+
+    const res = await fetch(
+      "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?" + q
+    );
+
+    if (!res.ok) {
+      console.error("API ERROR", await res.text());
+      continue;
+    }
+
+    const json = await res.json();
+
+    if (json.Items && json.Items.length > 0) {
+      results = results.concat(json.Items);
+    }
+
+    // API制限対策
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  return results;
+}
   const q = new URLSearchParams({
     applicationId: appId,
     keyword: keyword,
@@ -115,12 +177,14 @@ module.exports = async function handler(req, res) {
     try {
       const raw = await search(appId, kw);
 
-      raw.forEach(r => {
-        if (r.itemCode && !seen.has(r.itemCode)) {
-          seen.add(r.itemCode);
-          allItems.push(toItem(r));
-        }
-      });
+     raw.forEach(r => {
+  const item = r.Item;
+
+  if (item?.itemCode && !seen.has(item.itemCode)) {
+    seen.add(item.itemCode);
+    allItems.push(toItem(r));
+  }
+});
 
     } catch (e) {
       console.error("Search error:", kw, e.message);
