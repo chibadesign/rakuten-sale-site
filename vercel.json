@@ -6,3 +6,12 @@
     }
   ]
 }
+{
+  "outputDirectory": "build",
+  "rewrites": [
+    {
+      "source": "/api/sale-items",
+      "destination": "/api/rakuten-items"
+    }
+  ]
+}
