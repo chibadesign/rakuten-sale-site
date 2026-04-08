@@ -1,4 +1,4 @@
-// 楽天市場 商品取得API（安定＆収益化＆100件）
+// 楽天市場 商品取得API（完全安定版）
 
 const CACHE_TTL = 60 * 60 * 1000;
 let cache = null;
@@ -15,9 +15,9 @@ function getCategory(name) {
   return "その他製菓用品";
 }
 
-// データ整形（★ここ重要）
+// データ整形（v2対応）
 function toItem(wrapper) {
-  const raw = wrapper.Item; // ←これ追加！！！
+  const raw = wrapper.Item;
 
   const image =
     raw.mediumImageUrls?.[0]?.imageUrl ||
@@ -45,37 +45,8 @@ function toItem(wrapper) {
     category: getCategory(raw.itemName),
   };
 }
-  const image =
-    raw.mediumImageUrls?.[0]?.imageUrl ||
-    raw.smallImageUrls?.[0]?.imageUrl ||
-    raw.largeImageUrl ||
-    "";
 
-  return {
-    itemCode: raw.itemCode,
-    itemName: raw.itemName,
-    shopName: raw.shopName,
-    itemPrice: raw.itemPrice,
-    pointRate: raw.pointRate || 1,
-    reviewAverage: raw.reviewAverage || 0,
-    reviewCount: raw.reviewCount || 0,
-
-    // ★画像（確実に出す）
-    imageUrl: image.replace("128x128", "300x300"),
-
-    // ★アフィリエイト（ここで付与）
-    itemUrl: raw.affiliateUrl
-      ? raw.affiliateUrl
-      : raw.itemUrl +
-        (raw.itemUrl.includes("?") ? "&" : "?") +
-        "scid=af_pc_etc&sc2id=" +
-        process.env.RAKUTEN_AFFILIATE_ID,
-
-    category: getCategory(raw.itemName),
-  };
-}
-
-// 検索API（★affiliateIdは絶対入れない）
+// 検索API（ページング対応）
 async function search(appId, keyword) {
   let results = [];
 
@@ -95,43 +66,20 @@ async function search(appId, keyword) {
     );
 
     if (!res.ok) {
-      console.error("API ERROR", await res.text());
+      console.error("API ERROR:", await res.text());
       continue;
     }
 
     const json = await res.json();
 
-    if (json.Items && json.Items.length > 0) {
+    if (json.Items) {
       results = results.concat(json.Items);
     }
 
-    // API制限対策
     await new Promise(r => setTimeout(r, 300));
   }
 
   return results;
-}
-  const q = new URLSearchParams({
-    applicationId: appId,
-    keyword: keyword,
-    hits: "30",
-    sort: "-reviewCount",
-    format: "json",
-    formatVersion: "2",
-  });
-
-  const res = await fetch(
-    "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?" + q
-  );
-
-  if (!res.ok) {
-    const text = await res.text();
-    console.error("API ERROR:", text);
-    return [];
-  }
-
-  const json = await res.json();
-  return json.Items || [];
 }
 
 module.exports = async function handler(req, res) {
@@ -149,7 +97,6 @@ module.exports = async function handler(req, res) {
 
   const appId = process.env.RAKUTEN_APP_ID;
 
-  // ★キーがなければ即終了（無限0件防止）
   if (!appId) {
     console.error("NO APP ID");
     return res.json({
@@ -160,7 +107,6 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  // ★検索ワード（増やしすぎない＝安定）
   const keywords = [
     "製菓道具",
     "お菓子作り",
@@ -177,23 +123,22 @@ module.exports = async function handler(req, res) {
     try {
       const raw = await search(appId, kw);
 
-     raw.forEach(r => {
-  const item = r.Item;
+      raw.forEach(r => {
+        const item = r.Item;
 
-  if (item?.itemCode && !seen.has(item.itemCode)) {
-    seen.add(item.itemCode);
-    allItems.push(toItem(r));
-  }
-});
+        if (item?.itemCode && !seen.has(item.itemCode)) {
+          seen.add(item.itemCode);
+          allItems.push(toItem(r));
+        }
+      });
 
     } catch (e) {
       console.error("Search error:", kw, e.message);
     }
   }
 
-  // ★0件対策（ここ超重要）
   if (allItems.length === 0) {
-    console.error("NO ITEMS FROM API");
+    console.error("NO ITEMS");
     return res.json({
       items: [],
       cachedAt: now,
@@ -202,7 +147,7 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  // ★売れる順
+  // 並び替え
   allItems.sort((a, b) => {
     if (b.reviewCount !== a.reviewCount) {
       return b.reviewCount - a.reviewCount;
@@ -210,7 +155,6 @@ module.exports = async function handler(req, res) {
     return b.reviewAverage - a.reviewAverage;
   });
 
-  // ★100件制限
   const items = allItems.slice(0, 100);
 
   cache = items;
