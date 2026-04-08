@@ -1,10 +1,9 @@
-// 楽天市場 商品取得API（完全安定版）
+// 楽天市場 商品取得API（エラー特定デバッグ版）
 
 const CACHE_TTL = 60 * 60 * 1000;
 let cache = null;
 let cacheAt = 0;
 
-// カテゴリ判定
 function getCategory(name) {
   const t = name || "";
   if (/ミキサー|オーブン/.test(t)) return "キッチン家電";
@@ -15,15 +14,9 @@ function getCategory(name) {
   return "その他";
 }
 
-// データ整形
 function toItem(wrapper) {
   const raw = wrapper.Item;
-
-  const image =
-    raw.mediumImageUrls?.[0]?.imageUrl ||
-    raw.smallImageUrls?.[0]?.imageUrl ||
-    "";
-
+  const image = raw.mediumImageUrls?.[0]?.imageUrl || raw.smallImageUrls?.[0]?.imageUrl || "";
   return {
     itemCode: raw.itemCode,
     itemName: raw.itemName,
@@ -32,108 +25,100 @@ function toItem(wrapper) {
     pointRate: raw.pointRate || 1,
     reviewAverage: raw.reviewAverage || 0,
     reviewCount: raw.reviewCount || 0,
-
-    // 高解像度化（?_ex=300x300 を付与して楽天側でリサイズさせるのが最も安全）
     imageUrl: image ? `${image.split('?')[0]}?_ex=300x300` : "",
-
-    // affiliateIdを渡していれば affiliateUrl にリンクが格納されます
     itemUrl: raw.affiliateUrl || raw.itemUrl,
-
     category: getCategory(raw.itemName),
   };
 }
 
-// API取得
-async function search(appId, affId, keyword) {
-  const q = new URLSearchParams({
-    applicationId: appId,
-    affiliateId: affId, // アフィリエイトIDをリクエストに含める
-    keyword: keyword,
-    hits: "30",
-    format: "json",
-    formatVersion: "2",
-  });
-
-  const res = await fetch(
-    "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?" + q
-  );
-
-  if (!res.ok) {
-    console.error("API ERROR:", await res.text());
-    return [];
-  }
-
-  const json = await res.json();
-  return json.Items || [];
-}
-
 module.exports = async function handler(req, res) {
   const now = Date.now();
-
-  // キャッシュ処理
-  if (cache && now - cacheAt < CACHE_TTL) {
-    return res.json({
-      items: cache,
-      cachedAt: cacheAt,
-      nextUpdate: cacheAt + CACHE_TTL,
-      fromCache: true,
-    });
+  
+  // URLに ?update=1 をつけるとキャッシュを無視して最新を取得
+  const forceUpdate = req.query.update === "1";
+  if (!forceUpdate && cache && now - cacheAt < CACHE_TTL) {
+    return res.json({ items: cache, fromCache: true });
   }
 
   const appId = process.env.RAKUTEN_APP_ID;
   const affId = process.env.RAKUTEN_AFFILIATE_ID;
 
-  if (!appId) {
+  // エラー特定用変数
+  let debugInfo = {
+    envCheck: {
+      hasAppId: !!appId,
+      hasAffId: !!affId,
+    },
+    apiResponses: []
+  };
+
+  if (!appId || !affId) {
     return res.json({
       items: [],
-      error: "NO APP ID",
+      error: "ENVIRONMENT_VARIABLE_MISSING",
+      debug: debugInfo
     });
   }
 
-  const keywords = [
-    "製菓道具",
-    "ケーキ型",
-    "チョコレート",
-    "お菓子作り"
-  ];
-
+  const keywords = ["製菓道具", "ケーキ型", "チョコレート"];
   const seen = new Set();
   let allItems = [];
 
-  for (const kw of keywords) {
-    // 検索関数に appId と affId を渡す
-    const raw = await search(appId, affId, kw);
+  try {
+    for (const kw of keywords) {
+      const q = new URLSearchParams({
+        applicationId: appId,
+        affiliateId: affId,
+        keyword: kw,
+        hits: "15",
+        format: "json",
+        formatVersion: "2",
+      });
 
-    raw.forEach(r => {
-      const item = r.Item;
+      const apiRes = await fetch("https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?" + q);
+      const json = await apiRes.json();
 
-      if (item?.itemCode && !seen.has(item.itemCode)) {
-        seen.add(item.itemCode);
-        allItems.push(toItem(r));
+      // 各APIリクエストの結果をデバッグ用に保存
+      debugInfo.apiResponses.push({
+        keyword: kw,
+        status: apiRes.status,
+        error: json.error || null,
+        error_description: json.error_description || null,
+        count: json.Items ? json.Items.length : 0
+      });
+
+      if (json.Items) {
+        json.Items.forEach(r => {
+          if (r.Item?.itemCode && !seen.has(r.Item.itemCode)) {
+            seen.add(r.Item.itemCode);
+            allItems.push(toItem(r));
+          }
+        });
       }
-    });
-  }
+    }
 
-  if (allItems.length === 0) {
+    if (allItems.length === 0) {
+      return res.json({
+        items: [],
+        error: "NO_DATA_FROM_RAKUTEN",
+        debug: debugInfo
+      });
+    }
+
+    allItems.sort((a, b) => b.reviewCount - a.reviewCount);
+    const items = allItems.slice(0, 100);
+
+    cache = items;
+    cacheAt = now;
+
+    return res.json({ items, fromCache: false });
+
+  } catch (err) {
     return res.json({
       items: [],
-      error: "NO DATA FROM API",
+      error: "SERVER_CRASH",
+      message: err.message,
+      debug: debugInfo
     });
   }
-
-  // レビュー件数順にソート
-  allItems.sort((a, b) => b.reviewCount - a.reviewCount);
-
-  // 上位100件を抽出
-  const items = allItems.slice(0, 100);
-
-  cache = items;
-  cacheAt = now;
-
-  return res.json({
-    items,
-    cachedAt: now,
-    nextUpdate: now + CACHE_TTL,
-    fromCache: false,
-  });
 };
