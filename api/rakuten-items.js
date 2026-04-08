@@ -25,8 +25,14 @@ function toItem(raw) {
     pointRate: raw.pointRate || 1,
     reviewAverage: raw.reviewAverage || 0,
     reviewCount: raw.reviewCount || 0,
-    imageUrl: raw.mediumImageUrls?.[0]?.imageUrl?.replace("128x128", "300x300") || null,
-    itemUrl: raw.affiliateUrl || raw.itemUrl,
+    imageUrl:
+  raw.mediumImageUrls?.[0]?.imageUrl ||
+  raw.smallImageUrls?.[0]?.imageUrl ||
+  raw.largeImageUrl ||
+  null,
+    itemUrl: raw.affiliateUrl
+  ? raw.affiliateUrl
+  : raw.itemUrl + (raw.itemUrl.includes("?") ? "&" : "?") + "scid=af_pc_etc&sc2id=" + process.env.RAKUTEN_AFFILIATE_ID,
     category: getCategory(raw.itemName),
   };
 }
