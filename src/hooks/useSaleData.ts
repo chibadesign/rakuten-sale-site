@@ -37,8 +37,11 @@ export function useSaleData() {
       });
 
       const formatted: SaleData = {
-        items,
-      };
+  items,
+  cachedAt: Date.now(),
+  nextUpdate: Date.now() + 1000 * 60 * 30, // 30分後
+  fromCache: false,
+};
 
       setData(formatted);
 
