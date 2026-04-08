@@ -1,4 +1,4 @@
-// 楽天市場 商品取得API（100商品最適化版）
+// 楽天市場 商品取得API（安定＆収益化＆100件）
 
 const CACHE_TTL = 60 * 60 * 1000;
 let cache = null;
@@ -6,7 +6,7 @@ let cacheAt = 0;
 
 // カテゴリ判定
 function getCategory(name) {
-  const t = name;
+  const t = name || "";
   if (/ホームベーカリー|ミキサー|オーブン/.test(t)) return "キッチン家電";
   if (/ケーキ型|マフィン型|タルト型|シリコン型/.test(t)) return "製菓型・天板";
   if (/絞り袋|口金|デコレーション/.test(t)) return "デコレーション用品";
@@ -15,8 +15,14 @@ function getCategory(name) {
   return "その他製菓用品";
 }
 
-// データ整形
+// データ整形（★ここ重要）
 function toItem(raw) {
+  const image =
+    raw.mediumImageUrls?.[0]?.imageUrl ||
+    raw.smallImageUrls?.[0]?.imageUrl ||
+    raw.largeImageUrl ||
+    "";
+
   return {
     itemCode: raw.itemCode,
     itemName: raw.itemName,
@@ -25,19 +31,23 @@ function toItem(raw) {
     pointRate: raw.pointRate || 1,
     reviewAverage: raw.reviewAverage || 0,
     reviewCount: raw.reviewCount || 0,
-    imageUrl:
-  raw.mediumImageUrls?.[0]?.imageUrl ||
-  raw.smallImageUrls?.[0]?.imageUrl ||
-  raw.largeImageUrl ||
-  null,
+
+    // ★画像（確実に出す）
+    imageUrl: image.replace("128x128", "300x300"),
+
+    // ★アフィリエイト（ここで付与）
     itemUrl: raw.affiliateUrl
-  ? raw.affiliateUrl
-  : raw.itemUrl + (raw.itemUrl.includes("?") ? "&" : "?") + "scid=af_pc_etc&sc2id=" + process.env.RAKUTEN_AFFILIATE_ID,
+      ? raw.affiliateUrl
+      : raw.itemUrl +
+        (raw.itemUrl.includes("?") ? "&" : "?") +
+        "scid=af_pc_etc&sc2id=" +
+        process.env.RAKUTEN_AFFILIATE_ID,
+
     category: getCategory(raw.itemName),
   };
 }
 
-// 検索API
+// 検索API（★affiliateIdは絶対入れない）
 async function search(appId, keyword) {
   const q = new URLSearchParams({
     applicationId: appId,
@@ -54,7 +64,8 @@ async function search(appId, keyword) {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text);
+    console.error("API ERROR:", text);
+    return [];
   }
 
   const json = await res.json();
@@ -76,7 +87,9 @@ module.exports = async function handler(req, res) {
 
   const appId = process.env.RAKUTEN_APP_ID;
 
+  // ★キーがなければ即終了（無限0件防止）
   if (!appId) {
+    console.error("NO APP ID");
     return res.json({
       items: [],
       cachedAt: now,
@@ -85,14 +98,14 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  // ★ここが強化ポイント
+  // ★検索ワード（増やしすぎない＝安定）
   const keywords = [
     "製菓道具",
-    "スイーツ",
     "お菓子作り",
     "ケーキ型",
     "チョコレート",
-    "クッキングシート"
+    "クッキングシート",
+    "スイーツ"
   ];
 
   const seen = new Set();
@@ -114,17 +127,26 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  // ★売れる並び順（超重要）
+  // ★0件対策（ここ超重要）
+  if (allItems.length === 0) {
+    console.error("NO ITEMS FROM API");
+    return res.json({
+      items: [],
+      cachedAt: now,
+      nextUpdate: now + CACHE_TTL,
+      isEmpty: true,
+    });
+  }
+
+  // ★売れる順
   allItems.sort((a, b) => {
-    // レビュー数重視（信頼）
     if (b.reviewCount !== a.reviewCount) {
       return b.reviewCount - a.reviewCount;
     }
-    // 次に評価
     return b.reviewAverage - a.reviewAverage;
   });
 
-  // ★100件に制限（UX最適）
+  // ★100件制限
   const items = allItems.slice(0, 100);
 
   cache = items;
