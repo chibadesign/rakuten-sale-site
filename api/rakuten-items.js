@@ -1,11 +1,13 @@
-// 楽天市場 製菓道具 商品取得API v4
-// 2026年新ドメイン対応: openapi.rakuten.co.jp
+// 楽天市場 製菓道具 商品取得API v5
+// 2026年新API対応・正しいエンドポイント使用
 
 const CACHE_TTL = 60 * 60 * 1000;
 let _cache = null;
 let _cacheAt = 0;
 
 const SITE_URL = "https://rakuten-sale-site.vercel.app";
+const SEARCH_URL = "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601";
+const RANKING_URL = "https://openapi.rakuten.co.jp/ichibaranking/api/IchibaItem/Ranking/20220601";
 
 function getCategory(name) {
   if (/ホームベーカリー|ハンドミキサー|スタンドミキサー|フードプロセッサー|電動ミキサー|オーブン/.test(name)) return "キッチン家電";
@@ -21,37 +23,42 @@ function getCategory(name) {
 }
 
 function makeAffUrl(itemUrl, affId) {
-  if (!itemUrl) return "";
+  if (!itemUrl) return "https://www.rakuten.co.jp/";
   return "https://hb.afl.rakuten.co.jp/ichiba/default/?pc=" + encodeURIComponent(itemUrl) + "&m=" + affId;
 }
 
+function getImageUrl(raw) {
+  try {
+    if (raw.mediumImageUrls && raw.mediumImageUrls[0] && raw.mediumImageUrls[0].imageUrl) {
+      return raw.mediumImageUrls[0].imageUrl.split("?")[0] + "?_ex=300x300";
+    }
+    if (raw.smallImageUrls && raw.smallImageUrls[0] && raw.smallImageUrls[0].imageUrl) {
+      return raw.smallImageUrls[0].imageUrl.split("?")[0] + "?_ex=300x300";
+    }
+  } catch(e) {}
+  return null;
+}
+
 function formatItem(raw, affId) {
-  const img = raw.mediumImageUrls && raw.mediumImageUrls[0]
-    ? raw.mediumImageUrls[0].imageUrl.split("?")[0] + "?_ex=300x300"
-    : null;
-  const baseUrl = raw.itemUrl || "";
   return {
-    itemCode: raw.itemCode,
-    itemName: raw.itemName,
+    itemCode: raw.itemCode || "",
+    itemName: raw.itemName || "",
     shopName: raw.shopName || "",
     itemPrice: raw.itemPrice || 0,
     pointRate: raw.pointRate || 1,
     reviewAverage: raw.reviewAverage || 0,
     reviewCount: raw.reviewCount || 0,
-    imageUrl: img,
-    itemUrl: makeAffUrl(baseUrl, affId) || baseUrl,
+    imageUrl: getImageUrl(raw),
+    itemUrl: makeAffUrl(raw.itemUrl || "", affId),
     category: getCategory(raw.itemName || ""),
   };
 }
-
-// 新APIエンドポイント
-const BASE_URL = "https://openapi.rakuten.co.jp/ichibams/api";
 
 function makeHeaders() {
   return {
     "Origin": SITE_URL,
     "Referer": SITE_URL + "/",
-    "User-Agent": "Mozilla/5.0 (compatible; BakingSaleBot/1.0)",
+    "User-Agent": "Mozilla/5.0 (compatible; RakutenBot/1.0)",
     "Accept": "application/json",
   };
 }
@@ -70,14 +77,14 @@ async function searchItems(appId, accessKey, affId, keyword, genreId) {
     availability: "1",
   };
   if (genreId) params.genreId = String(genreId);
-  const url = BASE_URL + "/IchibaItem/Search/20220601?" + new URLSearchParams(params);
+  const url = SEARCH_URL + "?" + new URLSearchParams(params);
   const res = await fetch(url, { headers: makeHeaders() });
   if (!res.ok) {
     const txt = await res.text();
-    throw new Error("Search[" + keyword + "] HTTP " + res.status + ": " + txt.slice(0, 150));
+    throw new Error("Search HTTP " + res.status + ": " + txt.slice(0, 150));
   }
   const data = await res.json();
-  if (data.error) throw new Error("Search[" + keyword + "] error: " + data.error_description);
+  if (data.error) throw new Error("Search error: " + data.error_description);
   return Array.isArray(data.Items) ? data.Items : [];
 }
 
@@ -91,14 +98,14 @@ async function getRanking(appId, accessKey, affId, genreId) {
     formatVersion: "2",
     imageFlag: "1",
   };
-  const url = BASE_URL + "/IchibaItem/Ranking/20170628?" + new URLSearchParams(params);
+  const url = RANKING_URL + "?" + new URLSearchParams(params);
   const res = await fetch(url, { headers: makeHeaders() });
   if (!res.ok) {
     const txt = await res.text();
-    throw new Error("Ranking[" + genreId + "] HTTP " + res.status + ": " + txt.slice(0, 150));
+    throw new Error("Ranking HTTP " + res.status + ": " + txt.slice(0, 150));
   }
   const data = await res.json();
-  if (data.error) throw new Error("Ranking[" + genreId + "] error: " + data.error_description);
+  if (data.error) throw new Error("Ranking error: " + data.error_description);
   return Array.isArray(data.Items) ? data.Items : [];
 }
 
@@ -145,13 +152,14 @@ module.exports = async function handler(req, res) {
   const affId = process.env.RAKUTEN_AFFILIATE_ID || "237f988f.e7462562.237f9890.afa75716";
 
   if (!appId || !accessKey) {
-    console.log("[rakuten-items] Missing credentials - returning mock");
+    console.log("[v5] Missing credentials");
     return res.status(200).json({ items: getMockItems(), cachedAt: now, nextUpdate: now + CACHE_TTL, fromCache: false, isMock: true, total: getMockItems().length });
   }
 
-  console.log("[rakuten-items] Starting fetch with new API domain...");
+  console.log("[v5] Starting with appId:", appId.slice(0, 8) + "...");
   const items = [];
   const seen = new Set();
+  const errors = [];
 
   function addItems(rawList) {
     let n = 0;
@@ -166,40 +174,43 @@ module.exports = async function handler(req, res) {
     return n;
   }
 
-  const tasks = [
-    { type: "ranking", genreId: 216131 },
-    { type: "ranking", genreId: 100227 },
-    { type: "search", kw: "製菓型 シリコン お菓子", genre: 216131 },
-    { type: "search", kw: "ハンドミキサー 製菓 お菓子作り", genre: null },
-    { type: "search", kw: "製菓材料 お菓子 人気", genre: 216131 },
-    { type: "search", kw: "デコレーション 絞り袋 口金 ケーキ", genre: null },
-    { type: "search", kw: "クッキングシート オーブンシート", genre: null },
-    { type: "search", kw: "ラッピング お菓子 ギフト袋", genre: null },
-    { type: "search", kw: "製菓道具 初心者 セット", genre: null },
-    { type: "search", kw: "チョコレート 製菓用 クーベルチュール", genre: 216131 },
-    { type: "search", kw: "薄力粉 強力粉 製菓", genre: 216131 },
-    { type: "search", kw: "タルト型 ケーキ型 製菓", genre: null },
+  // ランキング取得（製菓・製パン材料 216131）
+  try {
+    const r = await getRanking(appId, accessKey, affId, 216131);
+    console.log("[ranking 216131] got:", r.length, "added:", addItems(r));
+  } catch(e) { errors.push("ranking 216131: " + e.message); console.error(e.message); }
+  await sleep(700);
+
+  // ランキング取得（キッチン用品 100227）
+  try {
+    const r = await getRanking(appId, accessKey, affId, 100227);
+    console.log("[ranking 100227] got:", r.length, "added:", addItems(r));
+  } catch(e) { errors.push("ranking 100227: " + e.message); console.error(e.message); }
+  await sleep(700);
+
+  // キーワード検索
+  const searches = [
+    { kw: "製菓型 シリコン お菓子", genre: 216131 },
+    { kw: "ハンドミキサー 製菓 お菓子作り", genre: null },
+    { kw: "製菓材料 お菓子 人気", genre: 216131 },
+    { kw: "デコレーション 絞り袋 口金", genre: null },
+    { kw: "クッキングシート オーブンシート", genre: null },
+    { kw: "ラッピング お菓子 ギフト袋", genre: null },
+    { kw: "製菓道具 初心者 セット", genre: null },
+    { kw: "チョコレート 製菓用", genre: 216131 },
+    { kw: "薄力粉 強力粉 製菓", genre: 216131 },
+    { kw: "タルト型 ケーキ型", genre: null },
   ];
 
-  const errors = [];
-  for (const task of tasks) {
+  for (const s of searches) {
     try {
-      let rawList;
-      if (task.type === "ranking") {
-        rawList = await getRanking(appId, accessKey, affId, task.genreId);
-      } else {
-        rawList = await searchItems(appId, accessKey, affId, task.kw, task.genre);
-      }
-      const n = addItems(rawList);
-      console.log("[" + (task.genreId || task.kw) + "] +" + n + " (total: " + items.length + ")");
-    } catch (e) {
-      errors.push(e.message);
-      console.error("[error] " + e.message);
-    }
+      const r = await searchItems(appId, accessKey, affId, s.kw, s.genre);
+      console.log("[search " + s.kw + "] got:", r.length, "added:", addItems(r), "total:", items.length);
+    } catch(e) { errors.push("search " + s.kw + ": " + e.message); console.error(e.message); }
     await sleep(700);
   }
 
-  console.log("[done] total: " + items.length + " errors: " + errors.length);
+  console.log("[v5 done] total:", items.length, "errors:", errors.length);
 
   if (items.length === 0) {
     return res.status(200).json({ items: getMockItems(), cachedAt: now, nextUpdate: now + CACHE_TTL, fromCache: false, isMock: true, apiErrors: errors, total: getMockItems().length });
